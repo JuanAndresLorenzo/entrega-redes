@@ -1,0 +1,190 @@
+### Diseño y Documentación de la Biblioteca JSONRPC-TCP
+
+### 1. Descripción General
+La biblioteca diseñada implementa un protocolo RPC basado en la especificación JSON-RPC 2.0. El cliente enviará solicitudes al servidor usando sockets TCP, y el servidor ejecutará procedimientos remotos, devolviendo los resultados al cliente a través de TCP.
+
+### 2. **Primitivas de la API de Sockets**
+
+Según la API de sockets, los sockets TCP funcionan de la siguiente manera:
+
+- **TCP Client**:
+  1. Se crea un socket maestro con `master = socket.tcp()`.
+  2. Con `master.connect(address, port)` se establece una conexión con el servidor.
+  3. El cliente puede enviar y recibir datos a través de `client.send(data)` y `client.receive()`.
+  
+- **TCP Server**:
+  1. Se crea un socket maestro con `master = socket.tcp()`.
+  2. El servidor debe estar a la escucha de conexiones con `server = master.listen()`.
+  3. Para aceptar conexiones entrantes, el servidor usa `client, err = server.accept()`.
+  4. Para intercambiar mensajes con el cliente, usa `client.send()` y `client.receive()`.
+
+
+### FUNCIONES GENERALES
+
+/* Para leer un json completo (no bloqueante) */
+function read_message(in: skt, in: buff, in: timeout, out: msg, out: remain, out: err){
+
+	bracket_count = 0
+	msg = buff
+	msg_complete = false
+	for (c, index) in msg {
+		if c == '{' {
+			bracket_count += 1
+		}
+		if c == '}' {
+			bracket_count -= 1
+		}
+
+		if bracket_count == 0 && index > 0 {
+			remain = msg.substr(index, msg.len())
+			msg = msg.substr(0, index)
+			msg_complete = true
+			break
+		}
+	}
+	
+
+	fin = now() + timeout
+	while !msg_complete {
+		skt.settimeout(fin - now())
+		
+		s, err = skt.recieve()
+		if (err == "closed") {
+			return nil, "closed"
+		} else if (error == timeout){
+			return nil, "timeout"
+		}
+		for (c, index) in s {
+			if c == '{' {
+				bracket_count += 1
+			}
+			if c == '}' {
+				bracket_count -= 1
+			}
+
+			if bracket_count == 0 && index > 0 {
+				remain = s.substr(index, msg.len())
+				msg = msg..s.substr(0, index)
+				msg_complete = true
+				break
+			}
+			msg = msg..s
+		}
+	}
+
+	return msg, remain, nil
+}
+
+
+/* Para escribir en mensaje completo (bloqueante) */
+function sendall(in: skt, in: msg, out: remain, out: err){
+	
+	remain = msg
+	repeat {
+
+		remain, err = skt.send(remain)
+		
+		if (err == "closed") {
+			return remain, "closed"
+		}
+	} until remain == ''
+
+	return '', nil
+
+}
+
+
+### SERVER
+
+Server(host, port){
+	methods = {};
+	master = socket.tcp();
+	master.bind(host, port);
+	server = master.listen();
+}	
+
+void serve() {
+
+	repeat {
+		
+		client, err = this.server.accept();
+
+		thread.new(handleRequest, client);
+	
+	} until false
+
+	master.close() // inalcanzable
+}
+
+void addMethod(method_name, func){
+	methods[method_name] = func
+}
+
+void close() {
+	master.close();
+	server.close();
+}
+
+void handleRequest (socket) {
+	buff = ""
+	timeout = 10
+	repeat {
+
+		msg, buff, err = read_message(socket, buff, timeout)
+		if err == "closed" {
+			return
+		}
+		
+		msg_json = JSON_parse(msg)
+
+		if msg_json.method == 'EXIT' {
+			ip, port = socket.getpeer()
+			remain, err = sendall(socket, "CLOSE "..ip)
+			if err == "closed" {
+				return
+			}
+			socket.close()
+			return
+		} else {
+			msg.json.method(msg.json.params)
+		}
+		
+	} until false
+}
+
+### CLIENTE
+
+Socket client = connect(address, port){
+	master = socket.tcp();
+	client, err = master.connect(address, port);
+
+	if err == 'failure'{
+		master.close(); //No estamos seguros si va
+	}
+	return client;
+}
+
+void close_connection(skt) {
+	skt.close()
+}
+
+var result = invoke_function(client, name, args){    
+
+	json_data = {
+		"jsonrpc": "2.0",
+		"method": name,
+		"params": args,
+		"id": self.id
+	}
+
+	remain, err = sendall(client, json_data)
+	if err == 'closed'{
+		return;
+	}
+
+	msg, remain, err = read_message(client, '', timeout)
+
+	if msg != ''{
+		return msg;
+	}
+}
